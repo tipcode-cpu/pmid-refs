@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="레퍼런스">
+<title>레퍼런스</title>
+<style>
+  :root {
+    --bg:#0f1115; --card:#191d24; --card2:#21262f; --line:#2c323d;
+    --text:#e8ecf2; --dim:#8b95a5; --accent:#f0b429; --danger:#e5644e;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    margin:0; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    background:var(--bg); color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;
+  }
+  main { max-width:720px; margin:0 auto; padding:18px 14px 60px; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  h1 { font-size:19px; margin:0; letter-spacing:-.02em; white-space:nowrap; }
+  .grow { flex:1; }
+
+  select, textarea, input[type=text] {
+    background:var(--card); color:var(--text);
+    border:1px solid var(--line); border-radius:11px;
+    padding:10px 12px; font:inherit; outline:none; width:100%;
+  }
+  select:focus, textarea:focus { border-color:var(--accent); }
+  textarea { resize:vertical; min-height:64px; font-size:15px; }
+
+  button {
+    background:var(--card2); color:var(--text);
+    border:1px solid var(--line); border-radius:11px;
+    padding:10px 14px; font:500 14px inherit; cursor:pointer; white-space:nowrap;
+  }
+  button:active { background:var(--line); }
+  button.primary { background:var(--accent); color:#1a1305; border-color:var(--accent); font-weight:600; }
+  button.ghost { background:none; border:none; color:var(--dim); padding:6px 8px; font-size:13px; }
+  button.ghost:hover { color:var(--text); }
+  button:disabled { opacity:.5; cursor:default; }
+
+  .bar { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  .bar > select { width:auto; flex:1; min-width:140px; }
+
+  #status { font-size:13px; color:var(--dim); min-height:20px; margin:8px 0; }
+  #status.err { color:var(--danger); }
+
+  .ref {
+    background:var(--card); border:1px solid var(--line); border-radius:13px;
+    padding:12px 14px; margin-bottom:9px;
+    display:flex; gap:10px; align-items:flex-start;
+  }
+  .num { color:var(--dim); font-size:13px; font-variant-numeric:tabular-nums; padding-top:2px; min-width:20px; }
+  .body { flex:1; min-width:0; }
+  .cite { font-weight:600; letter-spacing:-.01em; }
+  .title { font-size:13.5px; color:var(--dim); margin-top:3px; }
+  .ids { margin-top:6px; display:flex; gap:12px; flex-wrap:wrap; font-size:12.5px; }
+  .ids a { color:var(--accent); text-decoration:none; }
+  .ids a:hover { text-decoration:underline; }
+  .ids span { color:var(--dim); }
+
+  #empty { color:var(--dim); text-align:center; padding:40px 10px; font-size:14px; line-height:1.8; }
+  footer { margin-top:22px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>레퍼런스</h1>
+    <span class="grow"></span>
+    <span id="count" style="font-size:13px;color:var(--dim)"></span>
+  </header>
+
+  <div class="bar">
+    <select id="group"></select>
+    <button id="newGroup">+ 발표</button>
+    <button id="renameGroup" class="ghost">이름</button>
+    <button id="delGroup" class="ghost">삭제</button>
+  </div>
+
+  <textarea id="input" placeholder="PMID 붙여넣기 — 여러 개는 줄바꿈이나 쉼표로. PubMed 주소 그대로 붙여도 됩니다."></textarea>
+  <div class="bar" style="margin-top:8px">
+    <button id="add" class="primary grow">추가</button>
+    <select id="fmt" style="flex:0 0 auto;width:auto">
+      <option value="short">간단</option>
+      <option value="vancouver">Vancouver</option>
+      <option value="authoryear">저자-연도</option>
+    </select>
+    <button id="copy">복사</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="list"></div>
+  <div id="empty" hidden></div>
+
+  <footer>
+    <button class="ghost" id="export">백업 내보내기</button>
+    <button class="ghost" id="importBtn">불러오기</button>
+    <input type="file" id="importFile" accept="application/json" hidden>
+  </footer>
+</main>
+
+<script>
+const KEY = 'pmidrefs';
+const API = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi';
+
+let db = load();
+
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem(KEY));
+    if (d && d.refs && d.groups && d.groups.length) return d;
+  } catch (e) {}
+  return { refs: {}, groups: [{ id: 'g1', name: '기본', pmids: [] }], current: 'g1' };
+}
+function save() { localStorage.setItem(KEY, JSON.stringify(db)); }
+function group() { return db.groups.find(g => g.id === db.current) || db.groups[0]; }
+
+// ── 인용 포맷 ───────────────────────────────────────────
+function authorList(r) { return r.authors || []; }
+
+function cite(r, fmt) {
+  const a = authorList(r);
+  const first = a[0] || '';
+  const etal = a.length > 1 ? ' et al' : '';
+  const jy = `${r.journal} ${r.year}`;
+  if (fmt === 'short') {
+    return `${first}${etal}. ${jy}. PMID ${r.pmid}${r.doi ? '. doi:' + r.doi : ''}`;
+  }
+  if (fmt === 'authoryear') {
+    return `${first}${etal} (${r.year}) ${r.title} ${r.journal}.${r.doi ? ' doi:' + r.doi : ''}`;
+  }
+  // vancouver
+  const names = a.length > 6 ? a.slice(0, 6).join(', ') + ', et al' : a.join(', ');
+  let loc = r.volume || '';
+  if (r.issue) loc += `(${r.issue})`;
+  if (r.pages) loc += `:${r.pages}`;
+  return `${names}. ${r.title} ${r.journal}. ${r.year}${loc ? ';' + loc : ''}.` +
+         ` PMID: ${r.pmid}${r.doi ? '. doi: ' + r.doi : ''}`;
+}
+
+// ── 렌더 ────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function render() {
+  const g = group();
+  $('group').innerHTML = db.groups
+    .map(x => `<option value="${x.id}"${x.id === g.id ? ' selected' : ''}>${esc(x.name)} (${x.pmids.length})</option>`)
+    .join('');
+  $('count').textContent = `전체 ${Object.keys(db.refs).length}편`;
+
+  const list = $('list');
+  list.innerHTML = '';
+  g.pmids.forEach((pmid, i) => {
+    const r = db.refs[pmid];
+    if (!r) return;
+    const el = document.createElement('div');
+    el.className = 'ref';
+    el.innerHTML =
+      `<div class="num">${i + 1}</div>` +
+      `<div class="body">` +
+        `<div class="cite">${esc(cite(r, 'short').replace(/\. PMID.*$/, ''))}</div>` +
+        `<div class="title">${esc(r.title)}</div>` +
+        `<div class="ids">` +
+          `<a href="https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/" target="_blank" rel="noopener">PMID ${r.pmid}</a>` +
+          (r.doi ? `<a href="https://doi.org/${r.doi}" target="_blank" rel="noopener">doi:${esc(r.doi)}</a>`
+                 : `<span>doi 없음</span>`) +
+        `</div>` +
+      `</div>` +
+      `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>`;
+    list.appendChild(el);
+  });
+
+  $('empty').hidden = g.pmids.length > 0;
+  $('empty').innerHTML = 'PMID를 붙여넣고 추가를 누르세요.<br>발표별로 나눠 담고, 복사 버튼으로 한꺼번에 가져갑니다.';
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function status(msg, isErr) {
+  $('status').textContent = msg || '';
+  $('status').className = isErr ? 'err' : '';
+}
+
+// ── PMID 수집 ───────────────────────────────────────────
+async function addPmids(raw) {
+  const ids = [...new Set((raw.match(/\d{6,9}/g) || []))];
+  if (!ids.length) return status('PMID를 찾지 못했습니다.', true);
+
+  const g = group();
+  const known = ids.filter(id => db.refs[id]);
+  const need = ids.filter(id => !db.refs[id]);
+
+  // 이미 받아둔 건 네트워크 없이 바로 담기
+  known.forEach(id => { if (!g.pmids.includes(id)) g.pmids.push(id); });
+
+  if (need.length) {
+    status(`PubMed에서 ${need.length}편 불러오는 중…`);
+    try {
+      const res = await fetch(`${API}?db=pubmed&retmode=json&tool=pmid-refs&id=${need.join(',')}`);
+      const j = await res.json();
+      const r = j.result;
+      if (!r) throw new Error('응답 형식 오류');
+      const failed = [];
+      for (const id of need) {
+        const d = r[id];
+        if (!d || d.error || !d.uid) { failed.push(id); continue; }
+        db.refs[id] = {
+          pmid: id,
+          title: (d.title || '').replace(/\.$/, '') + '.',
+          authors: (d.authors || []).map(a => a.name).filter(Boolean),
+          journal: d.source || '',
+          year: (d.pubdate || '').slice(0, 4),
+          volume: d.volume || '', issue: d.issue || '', pages: d.pages || '',
+          doi: (d.articleids || []).filter(x => x.idtype === 'doi').map(x => x.value)[0] || ''
+        };
+        if (!g.pmids.includes(id)) g.pmids.push(id);
+      }
+      status(failed.length
+        ? `${need.length - failed.length}편 추가. 실패: ${failed.join(', ')}`
+        : `${need.length}편 추가.`, failed.length > 0);
+    } catch (e) {
+      return status('PubMed 연결 실패 — 인터넷을 확인하세요. (' + e.message + ')', true);
+    }
+  } else {
+    status(`${known.length}편 추가 (이미 받아둔 자료).`);
+  }
+
+  save(); render();
+  $('input').value = '';
+}
+
+// ── 이벤트 ──────────────────────────────────────────────
+$('add').addEventListener('click', () => addPmids($('input').value));
+$('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addPmids($('input').value);
+});
+
+$('group').addEventListener('change', e => { db.current = e.target.value; save(); render(); });
+
+$('newGroup').addEventListener('click', () => {
+  const name = prompt('발표 이름');
+  if (!name) return;
+  const id = 'g' + Date.now();
+  db.groups.push({ id, name, pmids: [] });
+  db.current = id;
+  save(); render();
+});
+
+$('renameGroup').addEventListener('click', () => {
+  const g = group();
+  const name = prompt('발표 이름', g.name);
+  if (!name) return;
+  g.name = name; save(); render();
+});
+
+$('delGroup').addEventListener('click', () => {
+  if (db.groups.length < 2) return status('마지막 발표는 지울 수 없습니다.', true);
+  const g = group();
+  if (!confirm(`"${g.name}" 발표를 지웁니다. 논문 자료 자체는 남습니다.`)) return;
+  db.groups = db.groups.filter(x => x.id !== g.id);
+  db.current = db.groups[0].id;
+  save(); render();
+});
+
+$('list').addEventListener('click', e => {
+  const pmid = e.target.dataset && e.target.dataset.del;
+  if (!pmid) return;
+  const g = group();
+  g.pmids = g.pmids.filter(x => x !== pmid);
+  save(); render();
+});
+
+$('copy').addEventListener('click', async () => {
+  const g = group(), fmt = $('fmt').value;
+  if (!g.pmids.length) return status('복사할 항목이 없습니다.', true);
+  const text = g.pmids.map((p, i) => `${i + 1}. ${cite(db.refs[p], fmt)}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    status(`${g.pmids.length}편 복사했습니다.`);
+  } catch (e) {
+    $('input').value = text;
+    status('클립보드 권한이 없어 위 칸에 넣었습니다. 직접 복사하세요.', true);
+  }
+});
+
+$('export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'refs-backup.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$('importBtn').addEventListener('click', () => $('importFile').click());
+$('importFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (!d.refs || !d.groups) throw new Error('형식이 다릅니다');
+    // 병합 — 기존 것을 지우지 않음
+    Object.assign(db.refs, d.refs);
+    for (const g of d.groups) {
+      const mine = db.groups.find(x => x.name === g.name);
+      if (mine) g.pmids.forEach(p => { if (!mine.pmids.includes(p)) mine.pmids.push(p); });
+      else db.groups.push({ id: 'g' + Date.now() + Math.floor(performance.now()), name: g.name, pmids: g.pmids });
+    }
+    save(); render();
+    status('불러오기 완료 (기존 자료와 합쳤습니다).');
+  } catch (err) {
+    status('불러오기 실패: ' + err.message, true);
+  }
+  e.target.value = '';
+});
+
+render();
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// #test 로 열면 포맷 로직 자체 점검
+if (location.hash === '#test') {
+  const r = { pmid: '37189276', title: 'Some title.', authors: ['Park S', 'Kim J'],
+              journal: 'Epidemiol Health', year: '2023', volume: '45', issue: '', pages: 'e2023045',
+              doi: '10.4178/epih.e2023045' };
+  console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023. PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
+  console.assert(cite(r, 'vancouver').includes('2023;45:e2023045.'), 'vancouver', cite(r, 'vancouver'));
+  const solo = Object.assign({}, r, { authors: ['Park S'] });
+  console.assert(cite(solo, 'short').startsWith('Park S. '), '단독저자 et al 없음', cite(solo, 'short'));
+  console.assert(!cite(Object.assign({}, r, { doi: '' }), 'short').includes('doi'), 'doi 없을 때', '');
+  console.log('self-check 완료');
+}
+</script>
+</body>
+</html>
