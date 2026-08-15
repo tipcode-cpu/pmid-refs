@@ -59,7 +59,9 @@
   .num { color:var(--dim); font-size:13px; font-variant-numeric:tabular-nums; padding-top:2px; min-width:20px; }
   .body { flex:1; min-width:0; }
   .cite { font-weight:600; letter-spacing:-.01em; }
-  .title { font-size:13.5px; color:var(--dim); margin-top:3px; }
+  .cite .pmid { color:var(--accent); text-decoration:none; font-size:13px; white-space:nowrap; }
+  .cite .pmid:hover { text-decoration:underline; }
+  .title { font-size:13.5px; color:var(--dim); margin-top:4px; }
   .ids { margin-top:6px; display:flex; gap:12px; flex-wrap:wrap; font-size:12.5px; }
   .ids a { color:var(--accent); text-decoration:none; }
   .ids a:hover { text-decoration:underline; }
@@ -125,13 +127,18 @@ function group() { return db.groups.find(g => g.id === db.current) || db.groups[
 // ── 인용 포맷 ───────────────────────────────────────────
 function authorList(r) { return r.authors || []; }
 
+// 저자 · 저널 · 연도 — 카드 첫 줄과 간단 포맷이 같은 함수를 쓴다.
+function head(r) {
+  const a = authorList(r);
+  return `${a[0] || ''}${a.length > 1 ? ' et al' : ''}. ${r.journal} ${r.year}`;
+}
+
 function cite(r, fmt) {
   const a = authorList(r);
   const first = a[0] || '';
   const etal = a.length > 1 ? ' et al' : '';
-  const jy = `${r.journal} ${r.year}`;
   if (fmt === 'short') {
-    return `${first}${etal}. ${jy}. PMID ${r.pmid}${r.doi ? '. doi:' + r.doi : ''}`;
+    return `${head(r)} PMID ${r.pmid}${r.doi ? '. doi:' + r.doi : ''}`;
   }
   if (fmt === 'authoryear') {
     return `${first}${etal} (${r.year}) ${r.title} ${r.journal}.${r.doi ? ' doi:' + r.doi : ''}`;
@@ -165,12 +172,14 @@ function render() {
     el.innerHTML =
       `<div class="num">${i + 1}</div>` +
       `<div class="body">` +
-        `<div class="cite">${esc(cite(r, 'short').replace(/\. PMID.*$/, ''))}</div>` +
+        `<div class="cite">${esc(head(r))} ` +
+          `<a class="pmid" href="https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/" target="_blank" rel="noopener">PMID ${r.pmid}</a>` +
+        `</div>` +
         `<div class="title">${esc(r.title)}</div>` +
         `<div class="ids">` +
-          `<a href="https://pubmed.ncbi.nlm.nih.gov/${r.pmid}/" target="_blank" rel="noopener">PMID ${r.pmid}</a>` +
           (r.doi ? `<a href="https://doi.org/${r.doi}" target="_blank" rel="noopener">doi:${esc(r.doi)}</a>`
                  : `<span>doi 없음</span>`) +
+          (r.volume ? `<span>${esc(r.volume)}${r.issue ? '(' + esc(r.issue) + ')' : ''}${r.pages ? ':' + esc(r.pages) : ''}</span>` : ``) +
         `</div>` +
       `</div>` +
       `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>`;
@@ -334,7 +343,8 @@ if (location.hash === '#test') {
   const r = { pmid: '37189276', title: 'Some title.', authors: ['Park S', 'Kim J'],
               journal: 'Epidemiol Health', year: '2023', volume: '45', issue: '', pages: 'e2023045',
               doi: '10.4178/epih.e2023045' };
-  console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023. PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
+  console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023 PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
+  console.assert(head(r) === 'Park S et al. Epidemiol Health 2023', '첫 줄', head(r));
   console.assert(cite(r, 'vancouver').includes('2023;45:e2023045.'), 'vancouver', cite(r, 'vancouver'));
   const solo = Object.assign({}, r, { authors: ['Park S'] });
   console.assert(cite(solo, 'short').startsWith('Park S. '), '단독저자 et al 없음', cite(solo, 'short'));
