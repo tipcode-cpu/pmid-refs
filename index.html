@@ -67,6 +67,8 @@
   .ids a:hover { text-decoration:underline; }
   .ids span { color:var(--dim); }
 
+  .acts { display:flex; flex-direction:column; gap:4px; }
+
   #empty { color:var(--dim); text-align:center; padding:40px 10px; font-size:14px; line-height:1.8; }
   footer { margin-top:22px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 </style>
@@ -185,8 +187,11 @@ function render() {
           (r.volume ? `<span>${esc(r.volume)}${r.issue ? '(' + esc(r.issue) + ')' : ''}${r.pages ? ':' + esc(r.pages) : ''}</span>` : ``) +
         `</div>` +
       `</div>` +
-      `<button class="ghost" data-copy="${r.pmid}" title="첫 줄 복사">복사</button>` +
-      `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>`;
+      `<div class="acts">` +
+        `<button class="ghost" data-copy="${r.pmid}" title="첫 줄 복사">복사</button>` +
+        `<button class="ghost" data-copyt="${r.pmid}" title="제목 복사">제목</button>` +
+        `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>` +
+      `</div>`;
     list.appendChild(el);
   });
 
@@ -288,6 +293,7 @@ $('list').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.copy) return copyText(line(db.refs[b.dataset.copy]), '첫 줄 복사했습니다.');
+  if (b.dataset.copyt) return copyText(db.refs[b.dataset.copyt].title, '제목 복사했습니다.');
   const pmid = b.dataset.del;
   if (!pmid) return;
   const g = group();
