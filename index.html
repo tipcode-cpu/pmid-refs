@@ -88,7 +88,7 @@
     <button id="delGroup" class="ghost">삭제</button>
   </div>
 
-  <textarea id="input" placeholder="PMID 붙여넣기 — 여러 개는 줄바꿈이나 쉼표로. PubMed 주소 그대로 붙여도 됩니다."></textarea>
+  <textarea id="input" placeholder="PMID · DOI · PMCID 붙여넣기 — 여러 개는 줄바꿈이나 쉼표로. PubMed·doi.org 주소 그대로 붙여도 됩니다."></textarea>
   <div class="bar" style="margin-top:8px">
     <button id="add" class="primary grow">추가</button>
     <select id="fmt" style="flex:0 0 auto;width:auto">
@@ -113,6 +113,9 @@
 <script>
 const KEY = 'pmidrefs';
 const API = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi';
+const SEARCH = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi';
+const DOI_RE = /10\.\d{4,9}\/[^\s,;"'<>]+/g;
+const PMC_RE = /PMC\d{5,9}/gi;
 
 let db = load();
 
@@ -196,7 +199,7 @@ function render() {
   });
 
   $('empty').hidden = g.pmids.length > 0;
-  $('empty').innerHTML = 'PMID를 붙여넣고 추가를 누르세요.<br>발표별로 나눠 담고, 복사 버튼으로 한꺼번에 가져갑니다.';
+  $('empty').innerHTML = 'PMID · DOI · PMCID를 붙여넣고 추가를 누르세요.<br>발표별로 나눠 담고, 복사 버튼으로 한꺼번에 가져갑니다.';
 }
 
 function esc(s) {
@@ -209,9 +212,40 @@ function status(msg, isErr) {
 }
 
 // ── PMID 수집 ───────────────────────────────────────────
+// DOI·PMCID를 먼저 걷어낸 뒤 남은 숫자만 PMID로 본다.
+// (DOI 안의 숫자가 PMID로 오인되던 문제도 여기서 막힌다)
+function parseIds(raw) {
+  let t = String(raw || '');
+  const dois = (t.match(DOI_RE) || []).map(d => d.replace(/[.,;:)\]\/]+$/, ''));
+  t = t.replace(DOI_RE, ' ');
+  const pmcids = (t.match(PMC_RE) || []).map(x => x.toUpperCase());
+  t = t.replace(PMC_RE, ' ');
+  return {
+    pmids: [...new Set(t.match(/\d{6,9}/g) || [])],
+    others: [...new Set([...dois, ...pmcids])]
+  };
+}
+
 async function addPmids(raw) {
-  const ids = [...new Set((raw.match(/\d{6,9}/g) || []))];
-  if (!ids.length) return status('PMID를 찾지 못했습니다.', true);
+  const parsed = parseIds(raw);
+  let ids = parsed.pmids;
+  let miss = 0;
+
+  // DOI·PMCID는 esearch로 PMID를 찾는다 (한 번의 OR 질의)
+  if (parsed.others.length) {
+    status(`DOI·PMCID ${parsed.others.length}건 조회 중…`);
+    const term = parsed.others.map(o => o.toUpperCase().startsWith('PMC') ? `${o}[pmcid]` : `${o}[doi]`).join(' OR ');
+    try {
+      const res = await fetch(`${SEARCH}?db=pubmed&retmode=json&retmax=200&tool=pmid-refs&term=${encodeURIComponent(term)}`);
+      const found = ((await res.json()).esearchresult || {}).idlist || [];
+      ids = [...new Set([...ids, ...found])];
+      miss = parsed.others.length - found.length;
+    } catch (e) {
+      return status('PubMed 연결 실패 — 인터넷을 확인하세요. (' + e.message + ')', true);
+    }
+  }
+
+  if (!ids.length) return status('PMID·DOI·PMCID를 찾지 못했습니다.', true);
 
   const g = group();
   const known = ids.filter(id => db.refs[id]);
@@ -251,6 +285,8 @@ async function addPmids(raw) {
   } else {
     status(`${known.length}편 추가 (이미 받아둔 자료).`);
   }
+
+  if (miss > 0) status($('status').textContent + ` / DOI·PMCID ${miss}건은 PubMed에 없습니다.`, true);
 
   save(); render();
   $('input').value = '';
@@ -363,6 +399,9 @@ if (location.hash === '#test') {
   console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023 PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
   console.assert(head(r) === 'Park S et al. Epidemiol Health 2023', '첫 줄', head(r));
   console.assert(line(r) === 'Park S et al. Epidemiol Health 2023 PMID 37189276', '낱개 복사 줄', line(r));
+  const p = parseIds('https://doi.org/10.4178/epih.e2023045  PMC1234567, 37189276');
+  console.assert(p.pmids.join() === '37189276', 'DOI 속 숫자를 PMID로 오인하지 않음', p.pmids);
+  console.assert(p.others.join() === '10.4178/epih.e2023045,PMC1234567', 'DOI·PMCID 추출', p.others);
   console.assert(cite(r, 'vancouver').includes('2023;45:e2023045.'), 'vancouver', cite(r, 'vancouver'));
   const solo = Object.assign({}, r, { authors: ['Park S'] });
   console.assert(cite(solo, 'short').startsWith('Park S. '), '단독저자 et al 없음', cite(solo, 'short'));
