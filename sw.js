@@ -1,6 +1,6 @@
 // 네트워크 우선, 실패하면 캐시 — 인터넷 없어도 저장된 레퍼런스는 열람 가능.
-const CACHE = 'refs-v1';
-const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'refs-v2';
+const ASSETS = ['./', './index.html', './qrcode.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

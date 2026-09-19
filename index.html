@@ -67,6 +67,9 @@
   .ids a:hover { text-decoration:underline; }
   .ids span { color:var(--dim); }
 
+  .qr { display:flex; flex-direction:column; align-items:center; gap:4px; flex:0 0 auto; }
+  .qr canvas { width:92px; height:92px; border-radius:6px; background:#fff; display:block; image-rendering:pixelated; }
+
   #empty { color:var(--dim); text-align:center; padding:40px 10px; font-size:14px; line-height:1.8; }
   footer { margin-top:22px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
 </style>
@@ -108,6 +111,7 @@
   </footer>
 </main>
 
+<script src="qrcode.js"></script>
 <script>
 const KEY = 'pmidrefs';
 const API = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi';
@@ -152,6 +156,39 @@ function cite(r, fmt) {
          ` PMID: ${r.pmid}${r.doi ? '. doi: ' + r.doi : ''}`;
 }
 
+// ── QR ─────────────────────────────────────────────────
+function pubmedUrl(pmid) { return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`; }
+
+function qrCanvas(text, scale, margin) {
+  const q = qrcode(0, 'M');       // 0 = 자동 버전, M = 25% 오류정정
+  q.addData(text); q.make();
+  const n = q.getModuleCount(), size = (n + margin * 2) * scale;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
+    if (q.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+  return cv;
+}
+
+async function copyQR(pmid) {
+  const cv = qrCanvas(pubmedUrl(pmid), 12, 4);   // 슬라이드용 고해상도
+  const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    status(`PMID ${pmid} QR을 복사했습니다. 슬라이드에 붙여넣으세요.`);
+  } catch (e) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `qr-${pmid}.png`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    status('클립보드를 쓸 수 없어 PNG 파일로 내려받았습니다.', true);
+  }
+}
+
 // ── 렌더 ────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -182,7 +219,9 @@ function render() {
           (r.volume ? `<span>${esc(r.volume)}${r.issue ? '(' + esc(r.issue) + ')' : ''}${r.pages ? ':' + esc(r.pages) : ''}</span>` : ``) +
         `</div>` +
       `</div>` +
+      `<div class="qr"><button class="ghost" data-qr="${r.pmid}">QR 복사</button></div>` +
       `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>`;
+    el.querySelector('.qr').prepend(qrCanvas(pubmedUrl(r.pmid), 3, 2));
     list.appendChild(el);
   });
 
@@ -281,7 +320,9 @@ $('delGroup').addEventListener('click', () => {
 });
 
 $('list').addEventListener('click', e => {
-  const pmid = e.target.dataset && e.target.dataset.del;
+  const d = e.target.dataset || {};
+  if (d.qr) return copyQR(d.qr);
+  const pmid = d.del;
   if (!pmid) return;
   const g = group();
   g.pmids = g.pmids.filter(x => x !== pmid);
@@ -349,6 +390,9 @@ if (location.hash === '#test') {
   const solo = Object.assign({}, r, { authors: ['Park S'] });
   console.assert(cite(solo, 'short').startsWith('Park S. '), '단독저자 et al 없음', cite(solo, 'short'));
   console.assert(!cite(Object.assign({}, r, { doi: '' }), 'short').includes('doi'), 'doi 없을 때', '');
+  const cv = qrCanvas(pubmedUrl('37189276'), 3, 2);
+  console.assert(cv.width === cv.height && cv.width >= (21 + 4) * 3, 'QR 캔버스 크기', cv.width);
+  console.assert(pubmedUrl('37189276') === 'https://pubmed.ncbi.nlm.nih.gov/37189276/', 'pubmed url');
   console.log('self-check 완료');
 }
 </script>
