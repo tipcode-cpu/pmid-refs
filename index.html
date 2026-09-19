@@ -68,7 +68,7 @@
   .ids span { color:var(--dim); }
 
   .qr { display:flex; flex-direction:column; align-items:center; gap:4px; flex:0 0 auto; }
-  .qr canvas { width:92px; height:92px; border-radius:6px; background:#fff; display:block; image-rendering:pixelated; }
+  .qr img { width:92px; height:92px; border-radius:6px; background:#fff; display:block; image-rendering:pixelated; }
 
   #empty { color:var(--dim); text-align:center; padding:40px 10px; font-size:14px; line-height:1.8; }
   footer { margin-top:22px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
@@ -173,20 +173,30 @@ function qrCanvas(text, scale, margin) {
   return cv;
 }
 
-async function copyQR(pmid) {
-  const cv = qrCanvas(pubmedUrl(pmid), 12, 4);   // 슬라이드용 고해상도
-  const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
-  try {
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-    status(`PMID ${pmid} QR을 복사했습니다. 슬라이드에 붙여넣으세요.`);
-  } catch (e) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `qr-${pmid}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    status('클립보드를 쓸 수 없어 PNG 파일로 내려받았습니다.', true);
-  }
+// toDataURL은 동기 — toBlob을 await하면 사파리가 제스처 만료로 보고 거부하고,
+// ClipboardItem에 Promise를 넘기면 크롬이 제스처 없을 때 응답하지 않는다.
+function pngBlob(cv) {
+  const bin = atob(cv.toDataURL('image/png').split(',')[1]);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: 'image/png' });
+}
+
+function copyQR(pmid) {
+  const blob = pngBlob(qrCanvas(pubmedUrl(pmid), 12, 4));   // 슬라이드용 고해상도
+  const write = (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write)
+    ? navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    : Promise.reject(new Error('클립보드 미지원'));
+
+  write.then(() => status(`PMID ${pmid} QR을 복사했습니다. 슬라이드에 붙여넣으세요.`))
+       .catch(() => {
+         const a = document.createElement('a');
+         a.href = URL.createObjectURL(blob);
+         a.download = `qr-${pmid}.png`;
+         a.click();
+         URL.revokeObjectURL(a.href);
+         status('클립보드를 쓸 수 없습니다. PNG로 내려받았고, QR을 길게 눌러 복사해도 됩니다.', true);
+       });
 }
 
 // ── 렌더 ────────────────────────────────────────────────
@@ -219,9 +229,11 @@ function render() {
           (r.volume ? `<span>${esc(r.volume)}${r.issue ? '(' + esc(r.issue) + ')' : ''}${r.pages ? ':' + esc(r.pages) : ''}</span>` : ``) +
         `</div>` +
       `</div>` +
-      `<div class="qr"><button class="ghost" data-qr="${r.pmid}">QR 복사</button></div>` +
+      `<div class="qr">` +
+        `<img src="${qrCanvas(pubmedUrl(r.pmid), 4, 2).toDataURL()}" alt="PMID ${r.pmid} PubMed QR" width="92" height="92">` +
+        `<button class="ghost" data-qr="${r.pmid}">QR 복사</button>` +
+      `</div>` +
       `<button class="ghost" data-del="${r.pmid}" title="이 발표에서 빼기">✕</button>`;
-    el.querySelector('.qr').prepend(qrCanvas(pubmedUrl(r.pmid), 3, 2));
     list.appendChild(el);
   });
 
@@ -393,6 +405,8 @@ if (location.hash === '#test') {
   const cv = qrCanvas(pubmedUrl('37189276'), 3, 2);
   console.assert(cv.width === cv.height && cv.width >= (21 + 4) * 3, 'QR 캔버스 크기', cv.width);
   console.assert(pubmedUrl('37189276') === 'https://pubmed.ncbi.nlm.nih.gov/37189276/', 'pubmed url');
+  const b = pngBlob(cv);
+  console.assert(b.type === 'image/png' && b.size > 100, 'PNG blob 동기 생성', b.size);
   console.log('self-check 완료');
 }
 </script>
