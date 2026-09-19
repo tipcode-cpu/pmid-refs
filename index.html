@@ -367,7 +367,7 @@ let cands = {};
 // "Butler et al., Circulation 2025;151:1111-1125, Figure 1." 같은 인용 문자열은
 // 그대로 넘기면 0건이 나온다 (et al.·Figure·페이지범위가 전부 AND로 걸린다).
 // 알아본 조각만 필드 질의로 바꾸고, 안 나오면 조건을 하나씩 풀어 넓힌다.
-function citationTerms(raw) {
+function citationParts(raw) {
   const t = String(raw)
     .replace(/\bet al\.?/gi, ' ')
     .replace(/\bfigs?\.?\s*\d+[a-z]?/gi, ' ')
@@ -379,15 +379,26 @@ function citationTerms(raw) {
   const vol = (t.match(/[;,]\s*(\d{1,4})\s*[:(]/) || [])[1];
   const page = (t.match(/:\s*(\d{1,6})/) || [])[1];
 
-  // 권·페이지 표기(2025;151:1111)가 있어야 인용 문자열로 본다.
-  // 그냥 "저자 저널 연도 키워드"로 적은 건 자유 검색이 더 잘 듣는다.
-  if (!year || !(vol || page)) return [t];
-
-  const words = t.slice(0, t.indexOf(year)).replace(/[.,;:]/g, ' ').split(/\s+/).filter(Boolean);
+  // 연도 앞부분을 저자 + 저널로 가른다
+  const words = (year ? t.slice(0, t.indexOf(year)) : t).replace(/[.,;:]/g, ' ').split(/\s+/).filter(Boolean);
   let author = words[0] || '';
   let rest = words.slice(1);
   if (rest[0] && /^[A-Z]{1,3}$/.test(rest[0])) { author += ' ' + rest[0]; rest = rest.slice(1); }  // "Butler J"
   const journal = rest.join(' ');
+
+  return { t, year, vol, page, author, journal };
+}
+
+function citationTerms(raw) {
+  const { t, year, vol, page, author, journal } = citationParts(raw);
+
+  // 마지막 보루 — 저널을 뺀 저자+연도. 저널 약칭 오타("N Eng J Med")로
+  // 전체 질의가 0건이 되는 걸 여기서 건진다.
+  const relaxed = (author && year) ? `${author}[au] AND ${year}[dp]` : null;
+
+  // 권·페이지 표기(2025;151:1111)가 있어야 인용 문자열로 본다.
+  // 그냥 "저자 저널 연도 키워드"로 적은 건 자유 검색이 더 잘 듣는다.
+  if (!year || !(vol || page)) return [t, relaxed].filter(Boolean);
 
   const f = [];
   if (author) f.push(`${author}[au]`);
@@ -398,7 +409,17 @@ function citationTerms(raw) {
   if (vol && page) terms.push([...f, `${vol}[vi]`, `${page}[pg]`].join(' AND '));
   if (vol) terms.push([...f, `${vol}[vi]`].join(' AND '));
   terms.push(f.join(' AND '));
-  return terms;
+  if (relaxed) terms.push(relaxed);
+  return [...new Set(terms)];
+}
+
+// 적어준 저널명과 얼마나 닮았나 (0~1). 조건을 넓혀 받은 후보를 줄 세우는 데 쓴다.
+// "N Eng J Med"처럼 한 글자 틀려도 "N Engl J Med"가 1점이 되도록 앞글자 일치로 센다.
+function journalScore(typed, actual) {
+  const words = x => String(x || '').toLowerCase().replace(/[^a-z]+/g, ' ').split(' ').filter(Boolean);
+  const a = words(typed), b = words(actual);
+  if (!a.length || !b.length) return 0;
+  return a.filter(w => b.some(x => x.startsWith(w) || w.startsWith(x))).length / a.length;
 }
 
 async function searchCitation(q) {
@@ -412,7 +433,9 @@ async function searchCitation(q) {
     }
     if (!ids.length) return status('검색 결과가 없습니다. 저자·저널·연도를 다시 확인해 보세요.', true);
     cands = (await summaries(ids)).refs;
-    const found = Object.keys(cands);
+    const typed = citationParts(q).journal;
+    const found = Object.keys(cands)
+      .sort((x, y) => journalScore(typed, cands[y].journal) - journalScore(typed, cands[x].journal));
     // 한 건뿐이면 고를 게 없다 — 바로 담고 무엇을 담았는지 알려준다
     if (found.length === 1) return take(found[0]);
     renderCands(found);
@@ -614,7 +637,13 @@ if (location.hash === '#test') {
   console.assert(ct[0] === 'Butler[au] AND Circulation[ta] AND 2025[dp] AND 151[vi] AND 1111[pg]', '인용 문자열 파싱', ct[0]);
   console.assert(ct.length === 3 && ct[2] === 'Butler[au] AND Circulation[ta] AND 2025[dp]', '조건을 풀어가며 넓힌다', ct);
   const free = citationTerms('Guan WJ N Engl J Med 2020 clinical characteristics');
-  console.assert(free.length === 1 && free[0].indexOf('[au]') < 0, '권·페이지 없으면 자유 검색 그대로', free);
+  console.assert(free[0].indexOf('[au]') < 0, '권·페이지 없으면 자유 검색이 먼저', free[0]);
+  console.assert(free[1] === 'Guan WJ[au] AND 2020[dp]', '못 찾으면 저자+연도로 넓힌다', free[1]);
+  const typo = citationTerms('Mullens W et al. N Eng J Med 2022.');
+  console.assert(typo[typo.length - 1] === 'Mullens W[au] AND 2022[dp]', '저널 오타 구제', typo);
+  console.assert(citationParts('Mullens W et al. N Eng J Med 2022.').journal === 'N Eng J Med', '저널 조각', citationParts('Mullens W et al. N Eng J Med 2022.').journal);
+  console.assert(journalScore('N Eng J Med', 'N Engl J Med') === 1, '오타 저널도 1점', journalScore('N Eng J Med', 'N Engl J Med'));
+  console.assert(journalScore('N Eng J Med', 'Eur J Heart Fail') < 0.5, '다른 저널은 낮은 점수', journalScore('N Eng J Med', 'Eur J Heart Fail'));
   const q = parseIds('Guan WJ N Engl J Med 2020 coronavirus');
   console.assert(!q.pmids.length && !q.others.length, '검색어에는 식별자가 없다', q);
   console.assert(q.rest === 'Guan WJ N Engl J Med 2020 coronavirus', '검색어 그대로 남는다', q.rest);
