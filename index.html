@@ -67,6 +67,7 @@
   .ids a:hover { text-decoration:underline; }
   .ids span { color:var(--dim); }
 
+  .cand-hd { color:var(--dim); font-size:13px; margin:2px 0 6px; }
   .qr { display:flex; flex-direction:column; align-items:center; gap:4px; flex:0 0 auto; }
   .qr img { width:92px; height:92px; border-radius:6px; background:#fff; display:block; image-rendering:pixelated; }
   .acts { display:flex; flex-direction:column; gap:4px; }
@@ -90,7 +91,7 @@
     <button id="delGroup" class="ghost">삭제</button>
   </div>
 
-  <textarea id="input" placeholder="PMID · DOI · PMCID 붙여넣기 — 여러 개는 줄바꿈이나 쉼표로. PubMed·doi.org 주소 그대로 붙여도 됩니다."></textarea>
+  <textarea id="input" placeholder="PMID · DOI · PMCID 붙여넣기 — 여러 개는 줄바꿈이나 쉼표로. 번호를 모르면 저자·저널·연도(예: Guan WJ N Engl J Med 2020 coronavirus)로 검색됩니다."></textarea>
   <div class="bar" style="margin-top:8px">
     <button id="add" class="primary grow">추가</button>
     <select id="fmt" style="flex:0 0 auto;width:auto">
@@ -102,6 +103,7 @@
   </div>
 
   <div id="status"></div>
+  <div id="cands"></div>
   <div id="list"></div>
   <div id="empty" hidden></div>
 
@@ -278,6 +280,23 @@ function render() {
   $('empty').innerHTML = 'PMID · DOI · PMCID를 붙여넣고 추가를 누르세요.<br>발표별로 나눠 담고, 복사 버튼으로 한꺼번에 가져갑니다.';
 }
 
+function renderCands(ids) {
+  const el = $('cands');
+  if (!ids.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="cand-hd">이 중에 맞는 것을 담으세요</div>` + ids.map(id => {
+    const r = cands[id];
+    return `<div class="ref">` +
+      `<div class="body">` +
+        `<div class="cite">${esc(head(r))} ` +
+          `<a class="pmid" href="${pubmedUrl(r.pmid)}" target="_blank" rel="noopener">PMID ${r.pmid}</a>` +
+        `</div>` +
+        `<div class="title">${esc(r.title)}</div>` +
+      `</div>` +
+      `<div class="acts"><button class="ghost" data-take="${r.pmid}" title="이 발표에 담기">담기</button></div>` +
+    `</div>`;
+  }).join('');
+}
+
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -296,10 +315,53 @@ function parseIds(raw) {
   t = t.replace(DOI_RE, ' ');
   const pmcids = (t.match(PMC_RE) || []).map(x => x.toUpperCase());
   t = t.replace(PMC_RE, ' ');
+  const pmids = [...new Set(t.match(/\d{6,9}/g) || [])];
   return {
-    pmids: [...new Set(t.match(/\d{6,9}/g) || [])],
-    others: [...new Set([...dois, ...pmcids])]
+    pmids,
+    others: [...new Set([...dois, ...pmcids])],
+    // 식별자를 다 걷어내고 남은 글 — 저자·저널·연도 검색어로 쓴다
+    rest: t.replace(/\d{6,9}/g, ' ').replace(/\s+/g, ' ').trim()
   };
+}
+
+// PMID 목록 → 서지정보. 저장·담기 같은 부수효과는 없다.
+async function summaries(ids) {
+  const res = await fetch(`${API}?db=pubmed&retmode=json&tool=pmid-refs&id=${ids.join(',')}`);
+  const r = (await res.json()).result;
+  if (!r) throw new Error('응답 형식 오류');
+  const out = {}, failed = [];
+  for (const id of ids) {
+    const d = r[id];
+    if (!d || d.error || !d.uid) { failed.push(id); continue; }
+    out[id] = {
+      pmid: id,
+      title: (d.title || '').replace(/\.$/, '') + '.',
+      authors: (d.authors || []).map(a => a.name).filter(Boolean),
+      journal: d.source || '',
+      year: (d.pubdate || '').slice(0, 4),
+      volume: d.volume || '', issue: d.issue || '', pages: d.pages || '',
+      doi: (d.articleids || []).filter(x => x.idtype === 'doi').map(x => x.value)[0] || ''
+    };
+  }
+  return { refs: out, failed };
+}
+
+// 식별자가 없을 때 — 저자·저널·연도 같은 글로 PubMed를 검색해 후보를 보여준다.
+// 어느 논문인지는 사람이 고른다 (엉뚱한 걸 말없이 담지 않는다).
+let cands = {};
+
+async function searchCitation(q) {
+  status(`PubMed 검색 중 — "${q}"`);
+  try {
+    const res = await fetch(`${SEARCH}?db=pubmed&retmode=json&retmax=8&sort=relevance&tool=pmid-refs&term=${encodeURIComponent(q)}`);
+    const ids = ((await res.json()).esearchresult || {}).idlist || [];
+    if (!ids.length) return status('검색 결과가 없습니다. 저자·저널·연도를 다시 확인해 보세요.', true);
+    cands = (await summaries(ids)).refs;
+    renderCands(Object.keys(cands));
+    status(`후보 ${Object.keys(cands).length}건 — 맞는 것을 담으세요.`);
+  } catch (e) {
+    status('PubMed 연결 실패 — 인터넷을 확인하세요. (' + e.message + ')', true);
+  }
 }
 
 async function addPmids(raw) {
@@ -321,7 +383,11 @@ async function addPmids(raw) {
     }
   }
 
-  if (!ids.length) return status('PMID·DOI·PMCID를 찾지 못했습니다.', true);
+  if (!ids.length) {
+    if (parsed.rest.length >= 3) return searchCitation(parsed.rest);
+    return status('PMID·DOI·PMCID를 찾지 못했습니다.', true);
+  }
+  renderCands([]);
 
   const g = group();
   const known = ids.filter(id => db.refs[id]);
@@ -333,23 +399,9 @@ async function addPmids(raw) {
   if (need.length) {
     status(`PubMed에서 ${need.length}편 불러오는 중…`);
     try {
-      const res = await fetch(`${API}?db=pubmed&retmode=json&tool=pmid-refs&id=${need.join(',')}`);
-      const j = await res.json();
-      const r = j.result;
-      if (!r) throw new Error('응답 형식 오류');
-      const failed = [];
-      for (const id of need) {
-        const d = r[id];
-        if (!d || d.error || !d.uid) { failed.push(id); continue; }
-        db.refs[id] = {
-          pmid: id,
-          title: (d.title || '').replace(/\.$/, '') + '.',
-          authors: (d.authors || []).map(a => a.name).filter(Boolean),
-          journal: d.source || '',
-          year: (d.pubdate || '').slice(0, 4),
-          volume: d.volume || '', issue: d.issue || '', pages: d.pages || '',
-          doi: (d.articleids || []).filter(x => x.idtype === 'doi').map(x => x.value)[0] || ''
-        };
+      const { refs, failed } = await summaries(need);
+      for (const id of Object.keys(refs)) {
+        db.refs[id] = refs[id];
         if (!g.pmids.includes(id)) g.pmids.push(id);
       }
       status(failed.length
@@ -399,6 +451,17 @@ $('delGroup').addEventListener('click', () => {
   db.groups = db.groups.filter(x => x.id !== g.id);
   db.current = db.groups[0].id;
   save(); render();
+});
+
+$('cands').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || !b.dataset.take) return;
+  const id = b.dataset.take, g = group();
+  db.refs[id] = db.refs[id] || cands[id];
+  if (!g.pmids.includes(id)) g.pmids.push(id);
+  save(); renderCands([]); render();
+  status(`PMID ${id} 담았습니다.`);
+  $('input').value = '';
 });
 
 $('list').addEventListener('click', e => {
@@ -486,6 +549,10 @@ if (location.hash === '#test') {
   console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023 PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
   console.assert(head(r) === 'Park S et al. Epidemiol Health 2023', '첫 줄', head(r));
   console.assert(line(r) === 'Park S et al. Epidemiol Health 2023 PMID 37189276', '낱개 복사 줄', line(r));
+  const q = parseIds('Guan WJ N Engl J Med 2020 coronavirus');
+  console.assert(!q.pmids.length && !q.others.length, '검색어에는 식별자가 없다', q);
+  console.assert(q.rest === 'Guan WJ N Engl J Med 2020 coronavirus', '검색어 그대로 남는다', q.rest);
+  console.assert(parseIds('37189276').rest === '', 'PMID만 있으면 검색어 없음', parseIds('37189276').rest);
   const p = parseIds('https://doi.org/10.4178/epih.e2023045  PMC1234567, 37189276');
   console.assert(p.pmids.join() === '37189276', 'DOI 속 숫자를 PMID로 오인하지 않음', p.pmids);
   console.assert(p.others.join() === '10.4178/epih.e2023045,PMC1234567', 'DOI·PMCID 추출', p.others);
