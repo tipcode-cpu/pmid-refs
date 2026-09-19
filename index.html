@@ -105,7 +105,8 @@
   <div id="empty" hidden></div>
 
   <footer>
-    <button class="ghost" id="export">백업 내보내기</button>
+    <button class="ghost" id="enw">EndNote 내보내기</button>
+    <button class="ghost" id="export">백업(JSON)</button>
     <button class="ghost" id="importBtn">불러오기</button>
     <input type="file" id="importFile" accept="application/json" hidden>
   </footer>
@@ -182,6 +183,14 @@ function pngBlob(cv) {
   return new Blob([u8], { type: 'image/png' });
 }
 
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 function copyQR(pmid) {
   const blob = pngBlob(qrCanvas(pubmedUrl(pmid), 12, 4));   // 슬라이드용 고해상도
   const write = (typeof ClipboardItem !== 'undefined' && navigator.clipboard && navigator.clipboard.write)
@@ -190,13 +199,30 @@ function copyQR(pmid) {
 
   write.then(() => status(`PMID ${pmid} QR을 복사했습니다. 슬라이드에 붙여넣으세요.`))
        .catch(() => {
-         const a = document.createElement('a');
-         a.href = URL.createObjectURL(blob);
-         a.download = `qr-${pmid}.png`;
-         a.click();
-         URL.revokeObjectURL(a.href);
+         download(blob, `qr-${pmid}.png`);
          status('클립보드를 쓸 수 없습니다. PNG로 내려받았고, QR을 길게 눌러 복사해도 됩니다.', true);
        });
+}
+
+// ── EndNote (.enw) ─────────────────────────────────────
+// EndNote import 포맷 — %0로 시작하고 레코드 사이는 빈 줄.
+function enw(r) {
+  const L = ['%0 Journal Article'];
+  (r.authors || []).forEach(a => {
+    const m = a.trim().match(/^(.+?)\s+([A-Za-z]{1,3})$/);   // "Park S" → "Park, S" (성을 제대로 잡게)
+    // 개인 저자가 아니면 단체 저자 — EndNote는 끝에 쉼표가 있어야 단체명으로 읽는다
+    L.push('%A ' + (m ? `${m[1]}, ${m[2]}` : a + ','));
+  });
+  L.push('%T ' + String(r.title || '').replace(/\.$/, ''));
+  if (r.journal) L.push('%J ' + r.journal);
+  if (r.year) L.push('%D ' + r.year);
+  if (r.volume) L.push('%V ' + r.volume);
+  if (r.issue) L.push('%N ' + r.issue);
+  if (r.pages) L.push('%P ' + r.pages);
+  L.push('%M ' + r.pmid);
+  if (r.doi) L.push('%R ' + r.doi);
+  L.push('%U ' + pubmedUrl(r.pmid));
+  return L.join('\r\n');   // EndNote(윈도우)는 CRLF가 안전
 }
 
 // ── 렌더 ────────────────────────────────────────────────
@@ -354,6 +380,16 @@ $('copy').addEventListener('click', async () => {
   }
 });
 
+$('enw').addEventListener('click', () => {
+  const g = group();
+  if (!g.pmids.length) return status('내보낼 항목이 없습니다.', true);
+  const text = g.pmids.map(p => enw(db.refs[p])).join('\r\n\r\n') + '\r\n\r\n';
+  // EndNote는 UTF-8 BOM이 있어야 한글·특수문자를 제대로 읽는다
+  download(new Blob(['\uFEFF' + text], { type: 'application/x-endnote-refer;charset=utf-8' }),
+           (g.name.replace(/[\\\/:*?"<>|]/g, '_') || 'refs') + '.enw');
+  status(`${g.pmids.length}편을 .enw로 내보냈습니다. EndNote에서 File > Import로 여세요.`);
+});
+
 $('export').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -407,6 +443,11 @@ if (location.hash === '#test') {
   console.assert(pubmedUrl('37189276') === 'https://pubmed.ncbi.nlm.nih.gov/37189276/', 'pubmed url');
   const b = pngBlob(cv);
   console.assert(b.type === 'image/png' && b.size > 100, 'PNG blob 동기 생성', b.size);
+  const e = enw(r).split('\r\n');
+  console.assert(e[0] === '%0 Journal Article', 'enw 첫 줄', e[0]);
+  console.assert(e.includes('%A Park, S') && e.includes('%A Kim, J'), 'enw 저자 성,이름', e.join('|'));
+  console.assert(e.includes('%M 37189276') && e.includes('%R 10.4178/epih.e2023045'), 'enw PMID/DOI', e.join('|'));
+  console.assert(e.includes('%T Some title'), 'enw 제목 끝점 제거', e.join('|'));
   console.log('self-check 완료');
 }
 </script>
