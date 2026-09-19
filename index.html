@@ -412,8 +412,11 @@ async function searchCitation(q) {
     }
     if (!ids.length) return status('검색 결과가 없습니다. 저자·저널·연도를 다시 확인해 보세요.', true);
     cands = (await summaries(ids)).refs;
-    renderCands(Object.keys(cands));
-    status(`후보 ${Object.keys(cands).length}건 — 맞는 것을 담으세요.`);
+    const found = Object.keys(cands);
+    // 한 건뿐이면 고를 게 없다 — 바로 담고 무엇을 담았는지 알려준다
+    if (found.length === 1) return take(found[0]);
+    renderCands(found);
+    status(`후보 ${found.length}건 — 맞는 것을 담으세요.`);
   } catch (e) {
     status('PubMed 연결 실패 — 인터넷을 확인하세요. (' + e.message + ')', true);
   }
@@ -508,15 +511,18 @@ $('delGroup').addEventListener('click', () => {
   save(); render();
 });
 
-$('cands').addEventListener('click', e => {
-  const b = e.target.closest('button');
-  if (!b || !b.dataset.take) return;
-  const id = b.dataset.take, g = group();
+function take(id) {
+  const g = group();
   db.refs[id] = db.refs[id] || cands[id];
   if (!g.pmids.includes(id)) g.pmids.push(id);
   save(); renderCands([]); render();
-  status(`PMID ${id} 담았습니다.`);
+  status(`${line(db.refs[id])} — 담았습니다.`);
   $('input').value = '';
+}
+
+$('cands').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.take) take(b.dataset.take);
 });
 
 $('list').addEventListener('click', e => {
