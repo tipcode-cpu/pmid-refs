@@ -70,7 +70,18 @@
   .cand-hd { color:var(--dim); font-size:13px; margin:2px 0 6px; }
   .qr { display:flex; flex-direction:column; align-items:center; gap:4px; flex:0 0 auto; }
   .qr img { width:92px; height:92px; border-radius:6px; background:#fff; display:block; image-rendering:pixelated; }
+  .qr-btns { display:flex; flex-wrap:wrap; justify-content:center; gap:0; max-width:136px; }
+  .qr-btns > * { font-size:12px; padding:5px 3px; }
+  .qr-btns a { color:var(--dim); text-decoration:none; white-space:nowrap; }
+  .qr-btns a:hover { color:var(--text); }
   .acts { display:flex; flex-direction:column; gap:4px; }
+
+  /* 폰 폭에서는 QR·버튼 칼럼을 제목 아래로 내린다 */
+  @media (max-width:520px) {
+    .ref { flex-wrap:wrap; }
+    .body { min-width:62%; }
+    .qr { margin-left:30px; }
+  }
 
   #empty { color:var(--dim); text-align:center; padding:40px 10px; font-size:14px; line-height:1.8; }
   footer { margin-top:22px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
@@ -266,7 +277,10 @@ function render() {
       `</div>` +
       `<div class="qr">` +
         `<img src="${qrCanvas(pubmedUrl(r.pmid), 4, 2).toDataURL()}" alt="PMID ${r.pmid} PubMed QR" width="92" height="92">` +
-        `<button class="ghost" data-qr="${r.pmid}">QR 복사</button>` +
+        `<div class="qr-btns">` +
+          `<button class="ghost" data-qr="${r.pmid}">QR 복사</button>` +
+          `<a href="${pubmedUrl(r.pmid)}" target="_blank" rel="noopener" title="PubMed에서 열기">PubMed ↗</a>` +
+        `</div>` +
       `</div>` +
       `<div class="acts">` +
         `<button class="ghost" data-copy="${r.pmid}" title="첫 줄 복사">복사</button>` +
@@ -350,11 +364,52 @@ async function summaries(ids) {
 // 어느 논문인지는 사람이 고른다 (엉뚱한 걸 말없이 담지 않는다).
 let cands = {};
 
+// "Butler et al., Circulation 2025;151:1111-1125, Figure 1." 같은 인용 문자열은
+// 그대로 넘기면 0건이 나온다 (et al.·Figure·페이지범위가 전부 AND로 걸린다).
+// 알아본 조각만 필드 질의로 바꾸고, 안 나오면 조건을 하나씩 풀어 넓힌다.
+function citationTerms(raw) {
+  const t = String(raw)
+    .replace(/\bet al\.?/gi, ' ')
+    .replace(/\bfigs?\.?\s*\d+[a-z]?/gi, ' ')
+    .replace(/\bfigure\s*\d+[a-z]?/gi, ' ')
+    .replace(/\bsuppl\w*\.?/gi, ' ')
+    .replace(/\s+/g, ' ').trim();
+
+  const year = (t.match(/\b(?:19|20)\d{2}\b/) || [])[0];
+  const vol = (t.match(/[;,]\s*(\d{1,4})\s*[:(]/) || [])[1];
+  const page = (t.match(/:\s*(\d{1,6})/) || [])[1];
+
+  // 권·페이지 표기(2025;151:1111)가 있어야 인용 문자열로 본다.
+  // 그냥 "저자 저널 연도 키워드"로 적은 건 자유 검색이 더 잘 듣는다.
+  if (!year || !(vol || page)) return [t];
+
+  const words = t.slice(0, t.indexOf(year)).replace(/[.,;:]/g, ' ').split(/\s+/).filter(Boolean);
+  let author = words[0] || '';
+  let rest = words.slice(1);
+  if (rest[0] && /^[A-Z]{1,3}$/.test(rest[0])) { author += ' ' + rest[0]; rest = rest.slice(1); }  // "Butler J"
+  const journal = rest.join(' ');
+
+  const f = [];
+  if (author) f.push(`${author}[au]`);
+  if (journal) f.push(`${journal}[ta]`);
+  f.push(`${year}[dp]`);
+
+  const terms = [];
+  if (vol && page) terms.push([...f, `${vol}[vi]`, `${page}[pg]`].join(' AND '));
+  if (vol) terms.push([...f, `${vol}[vi]`].join(' AND '));
+  terms.push(f.join(' AND '));
+  return terms;
+}
+
 async function searchCitation(q) {
   status(`PubMed 검색 중 — "${q}"`);
   try {
-    const res = await fetch(`${SEARCH}?db=pubmed&retmode=json&retmax=8&sort=relevance&tool=pmid-refs&term=${encodeURIComponent(q)}`);
-    const ids = ((await res.json()).esearchresult || {}).idlist || [];
+    let ids = [];
+    for (const term of citationTerms(q)) {
+      const res = await fetch(`${SEARCH}?db=pubmed&retmode=json&retmax=8&sort=relevance&tool=pmid-refs&term=${encodeURIComponent(term)}`);
+      ids = ((await res.json()).esearchresult || {}).idlist || [];
+      if (ids.length) break;
+    }
     if (!ids.length) return status('검색 결과가 없습니다. 저자·저널·연도를 다시 확인해 보세요.', true);
     cands = (await summaries(ids)).refs;
     renderCands(Object.keys(cands));
@@ -549,6 +604,11 @@ if (location.hash === '#test') {
   console.assert(cite(r, 'short') === 'Park S et al. Epidemiol Health 2023 PMID 37189276. doi:10.4178/epih.e2023045', 'short', cite(r, 'short'));
   console.assert(head(r) === 'Park S et al. Epidemiol Health 2023', '첫 줄', head(r));
   console.assert(line(r) === 'Park S et al. Epidemiol Health 2023 PMID 37189276', '낱개 복사 줄', line(r));
+  const ct = citationTerms('Butler et al., Circulation 2025;151:1111-1125, Figure 1.');
+  console.assert(ct[0] === 'Butler[au] AND Circulation[ta] AND 2025[dp] AND 151[vi] AND 1111[pg]', '인용 문자열 파싱', ct[0]);
+  console.assert(ct.length === 3 && ct[2] === 'Butler[au] AND Circulation[ta] AND 2025[dp]', '조건을 풀어가며 넓힌다', ct);
+  const free = citationTerms('Guan WJ N Engl J Med 2020 clinical characteristics');
+  console.assert(free.length === 1 && free[0].indexOf('[au]') < 0, '권·페이지 없으면 자유 검색 그대로', free);
   const q = parseIds('Guan WJ N Engl J Med 2020 coronavirus');
   console.assert(!q.pmids.length && !q.others.length, '검색어에는 식별자가 없다', q);
   console.assert(q.rest === 'Guan WJ N Engl J Med 2020 coronavirus', '검색어 그대로 남는다', q.rest);
