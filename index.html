@@ -552,7 +552,10 @@ $('list').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.qr) return copyQR(b.dataset.qr);
-  if (b.dataset.copy) return copyText(line(db.refs[b.dataset.copy]), '첫 줄 복사했습니다.');
+  if (b.dataset.copy) {
+    const r = db.refs[b.dataset.copy];
+    return copyText(line(r), '첫 줄 복사했습니다.', `${esc(head(r))} <b>PMID ${r.pmid}</b>`);
+  }
   if (b.dataset.copyt) return copyText(db.refs[b.dataset.copyt].title, '제목 복사했습니다.');
   const pmid = b.dataset.del;
   if (!pmid) return;
@@ -561,9 +564,15 @@ $('list').addEventListener('click', e => {
   save(); render();
 });
 
-async function copyText(text, ok) {
+// html을 주면 서식 붙여넣기(PPT·Word)용 text/html도 함께 넣는다.
+async function copyText(text, ok, html) {
   try {
-    await navigator.clipboard.writeText(text);
+    if (html && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      })]);
+    } else await navigator.clipboard.writeText(text);
     status(ok);
   } catch (e) {
     $('input').value = text;
